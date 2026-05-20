@@ -174,20 +174,21 @@ class BaseExtractor:
             logger.error(f"Token refresh exception: {e}")
             return False
 
-    async def _request(
+    async def _request_public(
             self, endpoint: str, params: Dict = None
     ) -> Optional[Dict[str, Any]]:
         """
-        GET request com rate limiting, retry e auto-refresh.
+        GET request SEM autenticação (endpoints públicos).
 
-        Fluxo:
-        1. Aguarda rate limiter (respeita limite da API)
-        2. Faz request
-        3. Se 200 → retorna dados
-        4. Se 401 → tenta refresh do token e repete
-        5. Se 429 → espera o tempo indicado e repete
-        6. Se erro → backoff exponencial e repete
-        7. Após N tentativas → desiste e retorna None
+        Conceito - Principle of Least Privilege invertido:
+        Alguns endpoints do ML funcionam APENAS sem token.
+        A API interpreta requests autenticados como operações do
+        vendedor e aplica restrições diferentes. Requests anônimos
+        são tratados como "busca de consumidor" - sem restrição.
+
+        Isso é comum em APIs que têm dois perfis de acesso:
+        - Público (consumer-facing): busca, categorias, tendências
+        - Privado (seller-facing): meus pedidos, minhas métricas
         """
         url = f"{self.config.base_url}{endpoint}"
 
@@ -195,39 +196,37 @@ class BaseExtractor:
             await self.rate_limiter.acquire()
 
             try:
-                async with self.session.get(url, params=params) as response:
-                    self.stats["requests"] += 1
+                # Sessão temporária SEM token
+                async with aiohttp.ClientSession(
+                        headers={"Accept": "application/json"},
+                        timeout=aiohttp.ClientTimeout(total=30)
+                ) as public_session:
+                    async with public_session.get(url, params=params) as response:
+                        self.stats["requests"] += 1
 
-                    if response.status == 200:
-                        return await response.json()
+                        if response.status == 200:
+                            return await response.json()
 
-                    elif response.status == 401:
-                        logger.warning("Token expired (401). Attempting refresh...")
-                        refreshed = await self._refresh_access_token()
-                        if refreshed:
-                            continue  # Tenta o request de novo com token novo
-                        else:
-                            logger.error("Token refresh failed. Aborting.")
+                        elif response.status == 429:
+                            wait = int(response.headers.get(
+                                "Retry-After",
+                                self.config.retry_delay * (attempt + 1)
+                            ))
+                            logger.warning(f"Rate limited (429). Waiting {wait}s.")
+                            self.stats["retries"] += 1
+                            await asyncio.sleep(wait)
+
+                        elif response.status == 404:
+                            logger.warning(f"Not found (404): {endpoint}")
                             return None
 
-                    elif response.status == 429:
-                        wait = int(response.headers.get(
-                            "Retry-After",
-                            self.config.retry_delay * (attempt + 1)
-                        ))
-                        logger.warning(f"Rate limited (429). Waiting {wait}s.")
-                        self.stats["retries"] += 1
-                        await asyncio.sleep(wait)
-
-                    elif response.status == 404:
-                        logger.warning(f"Not found (404): {endpoint}")
-                        return None
-
-                    else:
-                        body = await response.text()
-                        logger.error(f"HTTP {response.status} for {endpoint}: {body[:200]}")
-                        self.stats["errors"] += 1
-                        await asyncio.sleep(self.config.retry_delay * (attempt + 1))
+                        else:
+                            body = await response.text()
+                            logger.error(
+                                f"HTTP {response.status} for {endpoint}: {body[:200]}"
+                            )
+                            self.stats["errors"] += 1
+                            await asyncio.sleep(self.config.retry_delay * (attempt + 1))
 
             except asyncio.TimeoutError:
                 logger.error(f"Timeout: {endpoint} (attempt {attempt + 1})")

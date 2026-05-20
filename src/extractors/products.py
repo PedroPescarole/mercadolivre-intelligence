@@ -32,28 +32,11 @@ class ProductExtractor(BaseExtractor):
     """
 
     async def search(
-        self,
-        query: str,
-        category: str = None,
-        max_results: int = 200
+            self,
+            query: str,
+            category: str = None,
+            max_results: int = 200
     ) -> List[Dict[str, Any]]:
-        """
-        Busca produtos com paginação completa.
-
-        Conceito - Paginação Offset-based:
-        A API do ML usa offset/limit. Problema: se novos itens são inseridos
-        durante a paginação, você pode ter duplicatas ou pular itens.
-        Para nosso caso (snapshot diário) isso é aceitável.
-        Em sistemas real-time, usaríamos cursor-based pagination.
-
-        Args:
-            query: termo de busca (ex: "fone bluetooth")
-            category: ID da categoria para refinar (ex: "MLB1051")
-            max_results: máximo de produtos a coletar (API limita a 1000)
-
-        Returns:
-            Lista de dicts normalizados, prontos para carga no banco
-        """
         results = []
         offset = 0
         max_results = min(max_results, self.config.max_results_per_search)
@@ -68,7 +51,8 @@ class ProductExtractor(BaseExtractor):
             if category:
                 params["category"] = category
 
-            data = await self._request("/sites/MLB/search", params)
+            # Busca usa endpoint PÚBLICO (sem token)
+            data = await self._request_public("/sites/MLB/search", params)
 
             if not data or not data.get("results"):
                 break
@@ -78,7 +62,6 @@ class ProductExtractor(BaseExtractor):
                 if len(results) >= max_results:
                     break
 
-            # Verifica se há mais páginas
             total_available = data.get("paging", {}).get("total", 0)
             offset += self.config.page_size
 
