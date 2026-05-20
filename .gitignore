@@ -1,0 +1,21 @@
+# Credenciais - NUNCA subir
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+venv/
+.venv/
+
+# Dados brutos (pesados, não versionáveis)
+data/raw/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
